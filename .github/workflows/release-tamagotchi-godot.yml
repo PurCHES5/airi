@@ -50,6 +50,7 @@ jobs:
     env:
       VITE_ENABLE_POSTHOG: ${{ ((github.event_name == 'release') || (github.event_name == 'workflow_dispatch' && !inputs.build_only)) && 'true' || 'false' }}
     strategy:
+      fail-fast: false
       matrix:
         include:
           - os: macos-15-intel
@@ -57,14 +58,16 @@ jobs:
             target: x86_64-apple-darwin
             arch: x64
             godot_preset: "macOS"
-            skip: ${{ inputs.platform != '' && inputs.platform != 'all' && inputs.platform != 'macos' }}
+            skip: true
+            #skip: ${{ inputs.platform != '' && inputs.platform != 'all' && inputs.platform != 'macos' }}
 
           - os: macos-26
             artifact: darwin-arm64
             target: aarch64-apple-darwin
             arch: arm64
             godot_preset: "macOS"
-            skip: ${{ inputs.platform != '' && inputs.platform != 'all' && inputs.platform != 'macos' }}
+            skip: true
+            #skip: ${{ inputs.platform != '' && inputs.platform != 'all' && inputs.platform != 'macos' }}
 
           - os: ubuntu-latest
             artifact: linux-x64
