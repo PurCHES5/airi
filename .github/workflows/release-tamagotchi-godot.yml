@@ -148,7 +148,7 @@ jobs:
 
       - name: Build (Windows Only)
         if: matrix.os == 'windows-latest'
-        working-directory: main\engines\stage-tamagotchi-godot
+        working-directory: engines\stage-tamagotchi-godot
         run: |
           mkdir -p bundle
           godot --headless --export-release "${{ matrix.godot_preset }}" bundle/${{ env.PRODUCT_NAME }}.exe
