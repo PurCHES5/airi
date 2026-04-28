@@ -146,6 +146,9 @@ jobs:
 
       - run: pnpm run build:packages
 
+      - name: Debug File Structure
+        run: ls -R
+
       - name: Build (Windows Only)
         if: matrix.os == 'windows-latest'
         working-directory: engines\stage-tamagotchi-godot
