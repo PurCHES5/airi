@@ -146,9 +146,6 @@ jobs:
 
       - run: pnpm run build:packages
 
-      - name: Debug File Structure
-        run: ls -R
-
       - name: Build (Windows Only)
         if: matrix.os == 'windows-latest'
         working-directory: engines\stage-tamagotchi-godot
@@ -160,7 +157,7 @@ jobs:
 
       - name: Build (macOS Only)
         if: matrix.os == 'macos-15-intel' || matrix.os == 'macos-26'
-        working-directory: main/engines/stage-tamagotchi-godot
+        working-directory: engines/stage-tamagotchi-godot
         run: |
           echo "$CSC_CONTENT" | base64 --decode > apple-developer-code-signing.p12
           export CSC_LINK="./apple-developer-code-signing.p12"
@@ -176,7 +173,7 @@ jobs:
 
       - name: Build (Linux Only)
         if: matrix.os == 'ubuntu-latest' || matrix.os == 'ubuntu-24.04-arm'
-        working-directory: main/engines/stage-tamagotchi-godot
+        working-directory: engines/stage-tamagotchi-godot
         run: |
           mkdir -p bundle
           godot --headless --export-release "${{ matrix.godot_preset }}" bundle/${{ env.PRODUCT_NAME }}.x86_64
@@ -193,7 +190,7 @@ jobs:
 
       - name: Build Flatpak (Linux Only)
         if: ${{ matrix.os == 'ubuntu-latest' || matrix.os == 'ubuntu-24.04-arm' }}
-        working-directory: main/engines/stage-tamagotchi-godot
+        working-directory: engines/stage-tamagotchi-godot
         run: |
           mkdir -p dist
           flatpak-builder --user --install-deps-from=flathub ./flatpak ai.moeru.airi.flatpak.yml --force-clean
@@ -207,20 +204,20 @@ jobs:
 
       - name: Get Artifacts Envs (Nightly + Windows Only)
         if: ${{ github.event_name == 'schedule' && matrix.os == 'windows-latest' }}
-        working-directory: main/engines/stage-tamagotchi-godot
+        working-directory: engines\stage-tamagotchi-godot
         run: |
           echo "BUNDLE_NAME=$(pnpm exec tsx scripts/artifacts-metadata.ts ${{ matrix.target }} --get-bundle-name)" >> $env:GITHUB_ENV
           echo "VERSION=$(pnpm exec tsx scripts/artifacts-metadata.ts ${{ matrix.target }} --get-version)" >> $env:GITHUB_ENV
 
       - name: Get Artifacts Envs (Nightly + Non-Windows)
         if: ${{ github.event_name == 'schedule' && matrix.os != 'windows-latest' }}
-        working-directory: main/engines/stage-tamagotchi-godot
+        working-directory: engines/stage-tamagotchi-godot
         run: |
           echo "VERSION=$(pnpm exec tsx scripts/artifacts-metadata.ts ${{ matrix.target }} --get-version)" >> $GITHUB_ENV
 
       - name: Get Artifacts Envs (Nightly + macOS Only)
         if: ${{ github.event_name == 'schedule' && (matrix.os == 'macos-26' || matrix.os == 'macos-15-intel') }}
-        working-directory: main/engines/stage-tamagotchi-godot
+        working-directory: engines/stage-tamagotchi-godot
         run: |
           echo "BUNDLE_NAME=$(pnpm exec tsx scripts/artifacts-metadata.ts ${{ matrix.target }} --get-bundle-name)" >> $GITHUB_ENV
 
@@ -231,7 +228,7 @@ jobs:
 
       - name: Get Linux Artifact Names (Nightly + Linux Only)
         if: ${{ github.event_name == 'schedule' && (matrix.os == 'ubuntu-latest' || matrix.os == 'ubuntu-24.04-arm') }}
-        working-directory: main/engines/stage-tamagotchi-godot
+        working-directory: engines/stage-tamagotchi-godot
         run: |
           echo "DEB_BUNDLE_NAME=$(pnpm exec tsx scripts/artifacts-metadata.ts ${{ matrix.target }} --get-filename deb)" >> $GITHUB_ENV
           echo "RPM_BUNDLE_NAME=$(pnpm exec tsx scripts/artifacts-metadata.ts ${{ matrix.target }} --get-filename rpm)" >> $GITHUB_ENV
@@ -243,28 +240,28 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: ${{ env.BUNDLE_NAME }}
-          path: main/engines/stage-tamagotchi-godot/bundle/${{ env.BUNDLE_NAME }}
+          path: engines/stage-tamagotchi-godot/bundle/${{ env.BUNDLE_NAME }}
 
       - name: Upload Artifacts (Nightly + Linux deb)
         if: ${{ github.event_name == 'schedule' && (matrix.os == 'ubuntu-latest' || matrix.os == 'ubuntu-24.04-arm') }}
         uses: actions/upload-artifact@v7
         with:
           name: ${{ env.DEB_BUNDLE_NAME }}
-          path: main/engines/stage-tamagotchi-godot/bundle/${{ env.DEB_BUNDLE_NAME }}
+          path: engines/stage-tamagotchi-godot/bundle/${{ env.DEB_BUNDLE_NAME }}
 
       - name: Upload Artifacts (Nightly + Linux rpm)
         if: ${{ github.event_name == 'schedule' && (matrix.os == 'ubuntu-latest' || matrix.os == 'ubuntu-24.04-arm') }}
         uses: actions/upload-artifact@v7
         with:
           name: ${{ env.RPM_BUNDLE_NAME }}
-          path: main/engines/stage-tamagotchi-godot/bundle/${{ env.RPM_BUNDLE_NAME }}
+          path: engines/stage-tamagotchi-godot/bundle/${{ env.RPM_BUNDLE_NAME }}
 
       - name: Upload Flatpak Artifact (Nightly + Linux Only)
         if: ${{ github.event_name == 'schedule' && (matrix.os == 'ubuntu-latest' || matrix.os == 'ubuntu-24.04-arm') }}
         uses: actions/upload-artifact@v7
         with:
           name: ${{ env.FLATPAK_BUNDLE_NAME }}
-          path: main/engines/stage-tamagotchi-godot/bundle/${{ env.FLATPAK_BUNDLE_NAME }}
+          path: engines/stage-tamagotchi-godot/bundle/${{ env.FLATPAK_BUNDLE_NAME }}
 
       - name: Sign Windows Artifacts with SignPath (Nightly + Windows Only)
         id: signpath-nightly-windows
@@ -281,19 +278,19 @@ jobs:
           wait-for-completion: true
           wait-for-completion-timeout-in-seconds: 900
           download-signed-artifact-timeout-in-seconds: 900
-          output-artifact-directory: main/engines/stage-tamagotchi-godot/bundle/signed/windows/
+          output-artifact-directory: engines\stage-tamagotchi-godot\bundle\signed\windows\
 
       - name: Warn When Windows Signing Fails (Nightly)
         if: ${{ github.event_name == 'schedule' && matrix.os == 'windows-latest' && steps.signpath-nightly-windows.outcome != 'success' }}
         run: |
-          echo "::warning::SignPath Windows signing failed for nightly build. Continuing with unsigned artifact at main/engines/stage-tamagotchi-godot/bundle/${{ env.BUNDLE_NAME }}."
+          echo "::warning::SignPath Windows signing failed for nightly build. Continuing with unsigned artifact at engines/stage-tamagotchi-godot/bundle/${{ env.BUNDLE_NAME }}."
 
       - name: Upload Signed Artifacts (Nightly + Non-Linux)
         if: ${{ github.event_name == 'schedule' && matrix.os == 'windows-latest' && steps.signpath-nightly-windows.outcome == 'success' }}
         uses: actions/upload-artifact@v7
         with:
           name: ${{ env.BUNDLE_NAME }}
-          path: main/engines/stage-tamagotchi-godot/bundle/signed/windows/${{ env.BUNDLE_NAME }}
+          path: engines/stage-tamagotchi-godot/bundle/signed/windows/${{ env.BUNDLE_NAME }}
           overwrite: true
 
       - name: Upload Unsigned Windows Artifacts Fallback (Nightly)
@@ -301,7 +298,7 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: ${{ env.BUNDLE_NAME }}
-          path: main/engines/stage-tamagotchi-godot/bundle/${{ env.BUNDLE_NAME }}
+          path: engines/stage-tamagotchi-godot/bundle/${{ env.BUNDLE_NAME }}
           overwrite: true
 
       # ---------
@@ -310,20 +307,20 @@ jobs:
 
       - name: Get Artifacts Envs (Manual + Windows Only)
         if: ${{ github.event_name == 'workflow_dispatch' && matrix.os == 'windows-latest' }}
-        working-directory: main/engines/stage-tamagotchi-godot
+        working-directory: engines\stage-tamagotchi-godot
         run: |
           echo "BUNDLE_NAME=$(pnpm exec tsx scripts/artifacts-metadata.ts ${{ matrix.target }} --get-bundle-name --release ${{ !inputs.build_only && !inputs.artifacts_only }} --tag ${{ inputs.tag }} --auto-tag ${{ !inputs.build_only }})" >> $env:GITHUB_ENV
           echo "VERSION=$(pnpm exec tsx scripts/artifacts-metadata.ts ${{ matrix.target }} --get-version --release ${{ !inputs.build_only && !inputs.artifacts_only }} --tag ${{ inputs.tag }} --auto-tag ${{ !inputs.build_only }})" >> $env:GITHUB_ENV
 
       - name: Get Artifacts Envs (Manual + Non-Windows)
         if: ${{ github.event_name == 'workflow_dispatch' && matrix.os != 'windows-latest' }}
-        working-directory: main/engines/stage-tamagotchi-godot
+        working-directory: engines/stage-tamagotchi-godot
         run: |
           echo "VERSION=$(pnpm exec tsx scripts/artifacts-metadata.ts ${{ matrix.target }} --get-version --release ${{ !inputs.build_only && !inputs.artifacts_only }} --tag ${{ inputs.tag }} --auto-tag ${{ !inputs.build_only }})" >> $GITHUB_ENV
 
       - name: Get Artifacts Envs (Manual + macOS Only)
         if: ${{ github.event_name == 'workflow_dispatch' && (matrix.os == 'macos-26' || matrix.os == 'macos-15-intel') }}
-        working-directory: main/engines/stage-tamagotchi-godot
+        working-directory: engines/stage-tamagotchi-godot
         run: |
           echo "BUNDLE_NAME=$(pnpm exec tsx scripts/artifacts-metadata.ts ${{ matrix.target }} --get-bundle-name --release ${{ !inputs.build_only && !inputs.artifacts_only }} --tag ${{ inputs.tag }} --auto-tag ${{ !inputs.build_only }})" >> $GITHUB_ENV
 
@@ -334,7 +331,7 @@ jobs:
 
       - name: Get Linux Artifact Names (Manual + Non-Release + Linux Only)
         if: ${{ github.event_name == 'workflow_dispatch' && !inputs.build_only && inputs.artifacts_only && (matrix.os == 'ubuntu-latest' || matrix.os == 'ubuntu-24.04-arm') }}
-        working-directory: main/engines/stage-tamagotchi-godot
+        working-directory: engines/stage-tamagotchi-godot
         run: |
           echo "DEB_BUNDLE_NAME=$(pnpm exec tsx scripts/artifacts-metadata.ts ${{ matrix.target }} --get-filename deb --release ${{ !inputs.build_only && !inputs.artifacts_only }} --tag ${{ inputs.tag }} --auto-tag ${{ !inputs.build_only }})" >> $GITHUB_ENV
           echo "RPM_BUNDLE_NAME=$(pnpm exec tsx scripts/artifacts-metadata.ts ${{ matrix.target }} --get-filename rpm --release ${{ !inputs.build_only && !inputs.artifacts_only }} --tag ${{ inputs.tag }} --auto-tag ${{ !inputs.build_only }})" >> $GITHUB_ENV
@@ -346,28 +343,28 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: ${{ env.BUNDLE_NAME }}
-          path: main/engines/stage-tamagotchi-godot/bundle/${{ env.BUNDLE_NAME }}
+          path: engines/stage-tamagotchi-godot/bundle/${{ env.BUNDLE_NAME }}
 
       - name: Upload Artifacts (Manual + Non-Release + Linux deb)
         if: ${{ github.event_name == 'workflow_dispatch' && !inputs.build_only && inputs.artifacts_only && (matrix.os == 'ubuntu-latest' || matrix.os == 'ubuntu-24.04-arm') }}
         uses: actions/upload-artifact@v7
         with:
           name: ${{ env.DEB_BUNDLE_NAME }}
-          path: main/engines/stage-tamagotchi-godot/bundle/${{ env.DEB_BUNDLE_NAME }}
+          path: engines/stage-tamagotchi-godot/bundle/${{ env.DEB_BUNDLE_NAME }}
 
       - name: Upload Artifacts (Manual + Non-Release + Linux rpm)
         if: ${{ github.event_name == 'workflow_dispatch' && !inputs.build_only && inputs.artifacts_only && (matrix.os == 'ubuntu-latest' || matrix.os == 'ubuntu-24.04-arm') }}
         uses: actions/upload-artifact@v7
         with:
           name: ${{ env.RPM_BUNDLE_NAME }}
-          path: main/engines/stage-tamagotchi-godot/bundle/${{ env.RPM_BUNDLE_NAME }}
+          path: engines/stage-tamagotchi-godot/bundle/${{ env.RPM_BUNDLE_NAME }}
 
       - name: Upload Flatpak Artifact (Manual + Non-Release + Linux)
         if: ${{ github.event_name == 'workflow_dispatch' && !inputs.build_only && inputs.artifacts_only && (matrix.os == 'ubuntu-latest' || matrix.os == 'ubuntu-24.04-arm') }}
         uses: actions/upload-artifact@v7
         with:
           name: ${{ env.FLATPAK_BUNDLE_NAME }}
-          path: main/engines/stage-tamagotchi-godot/bundle/${{ env.FLATPAK_BUNDLE_NAME }}
+          path: engines/stage-tamagotchi-godot/bundle/${{ env.FLATPAK_BUNDLE_NAME }}
 
       - name: Sign Windows Artifacts with SignPath (Manual + Windows Only)
         id: signpath-manual-windows
@@ -384,24 +381,24 @@ jobs:
           wait-for-completion: true
           wait-for-completion-timeout-in-seconds: 900
           download-signed-artifact-timeout-in-seconds: 900
-          output-artifact-directory: main/engines/stage-tamagotchi-godot/bundle/signed/windows/
+          output-artifact-directory: engines\stage-tamagotchi-godot\bundle\signed\windows\
 
       - name: Warn When Windows Signing Fails (Manual)
         if: ${{ github.event_name == 'workflow_dispatch' && !inputs.build_only && inputs.artifacts_only && matrix.os == 'windows-latest' && steps.signpath-manual-windows.outcome != 'success' }}
         run: |
-          echo "::warning::SignPath Windows signing failed for workflow_dispatch artifact build. Continuing with unsigned artifact at main/engines/stage-tamagotchi-godot/bundle/${{ env.BUNDLE_NAME }}."
+          echo "::warning::SignPath Windows signing failed for workflow_dispatch artifact build. Continuing with unsigned artifact at engines/stage-tamagotchi-godot/bundle/${{ env.BUNDLE_NAME }}."
 
       - name: Move Signed Artifacts (Manual + Release + Windows Only)
         if: ${{ github.event_name == 'workflow_dispatch' && !inputs.build_only && inputs.artifacts_only && matrix.os == 'windows-latest' && steps.signpath-manual-windows.outcome == 'success' }}
         run: |
-          Move-Item -Force main/engines/stage-tamagotchi-godot/bundle/signed/windows/${{ env.BUNDLE_NAME }} main/engines/stage-tamagotchi-godot/bundle/${{ env.BUNDLE_NAME }}
+          Move-Item -Force engines/stage-tamagotchi-godot/bundle/signed/windows/${{ env.BUNDLE_NAME }} engines/stage-tamagotchi-godot/bundle/${{ env.BUNDLE_NAME }}
 
       - name: Upload Signed Artifacts (Manual + Windows Only)
         if: ${{ github.event_name == 'workflow_dispatch' && !inputs.build_only && inputs.artifacts_only && (matrix.os == 'windows-latest') }}
         uses: actions/upload-artifact@v7
         with:
           name: ${{ env.BUNDLE_NAME }}
-          path: main/engines/stage-tamagotchi-godot/bundle/${{ env.BUNDLE_NAME }}
+          path: engines\stage-tamagotchi-godot\bundle\${{ env.BUNDLE_NAME }}
           overwrite: true
 
       - name: Upload To GitHub Releases (Manual + Release + Overwrite Release)
@@ -409,12 +406,12 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: |
-            main/engines/stage-tamagotchi-godot/bundle/${{ env.PRODUCT_NAME }}-*.exe
-            main/engines/stage-tamagotchi-godot/bundle/${{ env.PRODUCT_NAME }}-*.zip
-            main/engines/stage-tamagotchi-godot/bundle/${{ env.PRODUCT_NAME }}-*.dmg
-            main/engines/stage-tamagotchi-godot/bundle/${{ env.PRODUCT_NAME }}-*.deb
-            main/engines/stage-tamagotchi-godot/bundle/${{ env.PRODUCT_NAME }}-*.rpm
-            main/engines/stage-tamagotchi-godot/bundle/${{ env.PRODUCT_NAME }}-*.flatpak
+            engines/stage-tamagotchi-godot/bundle/${{ env.PRODUCT_NAME }}-*.exe
+            engines/stage-tamagotchi-godot/bundle/${{ env.PRODUCT_NAME }}-*.zip
+            engines/stage-tamagotchi-godot/bundle/${{ env.PRODUCT_NAME }}-*.dmg
+            engines/stage-tamagotchi-godot/bundle/${{ env.PRODUCT_NAME }}-*.deb
+            engines/stage-tamagotchi-godot/bundle/${{ env.PRODUCT_NAME }}-*.rpm
+            engines/stage-tamagotchi-godot/bundle/${{ env.PRODUCT_NAME }}-*.flatpak
           append_body: true
           tag_name: ${{ inputs.tag }}
 
@@ -429,14 +426,14 @@ jobs:
 
       - name: Get Artifacts Envs (Automatic + Windows Only)
         if: ${{ github.event_name == 'release' && matrix.os == 'windows-latest' }}
-        working-directory: main/engines/stage-tamagotchi-godot
+        working-directory: engines/stage-tamagotchi-godot
         run: |
           echo "BUNDLE_NAME=$(pnpm exec tsx scripts/artifacts-metadata.ts ${{ matrix.target }} --get-bundle-name --release ${{ !inputs.build_only && !inputs.artifacts_only }} --tag ${{ inputs.tag }} --auto-tag ${{ !inputs.build_only }})" >> $env:GITHUB_ENV
           echo "VERSION=$(pnpm exec tsx scripts/artifacts-metadata.ts ${{ matrix.target }} --get-version --release ${{ !inputs.build_only && !inputs.artifacts_only }} --tag ${{ inputs.tag }} --auto-tag ${{ !inputs.build_only }})" >> $env:GITHUB_ENV
 
       - name: Get Artifacts Envs (Automatic + Non-Windows)
         if: ${{ github.event_name == 'release' && matrix.os != 'windows-latest' }}
-        working-directory: main/engines/stage-tamagotchi-godot
+        working-directory: engines/stage-tamagotchi-godot
         run: |
           echo "BUNDLE_NAME=$(pnpm exec tsx scripts/artifacts-metadata.ts ${{ matrix.target }} --get-bundle-name --release --auto-tag)" >> $GITHUB_ENV
 
@@ -446,7 +443,7 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: ${{ env.BUNDLE_NAME }}
-          path: main/engines/stage-tamagotchi-godot/bundle/${{ env.BUNDLE_NAME }}
+          path: engines\stage-tamagotchi-godot\bundle\${{ env.BUNDLE_NAME }}
 
       - name: Sign Windows Artifacts with SignPath (Nightly + Windows Only)
         id: signpath-release-windows
@@ -463,55 +460,55 @@ jobs:
           wait-for-completion: true
           wait-for-completion-timeout-in-seconds: 900
           download-signed-artifact-timeout-in-seconds: 900
-          output-artifact-directory: main/engines/stage-tamagotchi-godot/bundle/signed/windows/
+          output-artifact-directory: engines\stage-tamagotchi-godot\bundle\signed\windows\
 
       - name: Warn When Windows Signing Fails (Release)
         if: ${{ github.event_name == 'release' && matrix.os == 'windows-latest' && steps.signpath-release-windows.outcome != 'success' }}
         run: |
-          echo "::warning::SignPath Windows signing failed for release build. Continuing with unsigned artifact at main/engines/stage-tamagotchi-godot/bundle/${{ env.BUNDLE_NAME }}."
+          echo "::warning::SignPath Windows signing failed for release build. Continuing with unsigned artifact at engines/stage-tamagotchi-godot/bundle/${{ env.BUNDLE_NAME }}."
 
       - name: Move Signed Artifacts (Automatic + Windows Only)
         if: ${{ github.event_name == 'release' && matrix.os == 'windows-latest' && steps.signpath-release-windows.outcome == 'success' }}
         run: |
-          Move-Item -Force main/engines/stage-tamagotchi-godot/bundle/signed/windows/${{ env.BUNDLE_NAME }} main/engines/stage-tamagotchi-godot/bundle/${{ env.BUNDLE_NAME }}
+          Move-Item -Force engines\stage-tamagotchi-godot\bundle\signed\windows\${{ env.BUNDLE_NAME }} engines\stage-tamagotchi-godot\bundle\${{ env.BUNDLE_NAME }}
 
       - name: Upload Distribution Artifact (Automatic + macOS arm64 Only)
         if: ${{ github.event_name == 'release' && matrix.os == 'macos-26' }}
         uses: actions/upload-artifact@v7
         with:
           name: distribution-osx
-          path: main/engines/stage-tamagotchi-godot/bundle/${{ env.BUNDLE_NAME }}
+          path: engines/stage-tamagotchi-godot/bundle/${{ env.BUNDLE_NAME }}
 
       - name: Upload Distribution Artifact (Automatic + Windows Only)
         if: ${{ github.event_name == 'release' && matrix.os == 'windows-latest' }}
         uses: actions/upload-artifact@v7
         with:
           name: distribution-win
-          path: main/engines/stage-tamagotchi-godot/bundle/${{ env.BUNDLE_NAME }}
+          path: engines/stage-tamagotchi-godot/bundle/${{ env.BUNDLE_NAME }}
 
       - name: Upload Distribution Artifact (Automatic + Linux x64 Only)
         if: ${{ github.event_name == 'release' && matrix.os == 'ubuntu-latest' }}
         uses: actions/upload-artifact@v7
         with:
           name: distribution-linux-x64
-          path: main/engines/stage-tamagotchi-godot/bundle/${{ env.BUNDLE_NAME }}
+          path: engines/stage-tamagotchi-godot/bundle/${{ env.BUNDLE_NAME }}
 
       - name: Upload Distribution Artifact (Automatic + Linux arm64 Only)
         if: ${{ github.event_name == 'release' && matrix.os == 'ubuntu-24.04-arm' }}
         uses: actions/upload-artifact@v7
         with:
           name: distribution-linux-arm64
-          path: main/engines/stage-tamagotchi-godot/bundle/${{ env.BUNDLE_NAME }}
+          path: engines/stage-tamagotchi-godot/bundle/${{ env.BUNDLE_NAME }}
 
       - name: Upload To GitHub Releases (Automatic)
         if: ${{ github.event_name == 'release' }}
         uses: softprops/action-gh-release@v2
         with:
           files: |
-            main/engines/stage-tamagotchi-godot/bundle/${{ env.PRODUCT_NAME }}-*.exe
-            main/engines/stage-tamagotchi-godot/bundle/${{ env.PRODUCT_NAME }}-*.zip
-            main/engines/stage-tamagotchi-godot/bundle/${{ env.PRODUCT_NAME }}-*.dmg
-            main/engines/stage-tamagotchi-godot/bundle/${{ env.PRODUCT_NAME }}-*.deb
-            main/engines/stage-tamagotchi-godot/bundle/${{ env.PRODUCT_NAME }}-*.rpm
-            main/engines/stage-tamagotchi-godot/bundle/${{ env.PRODUCT_NAME }}-*.flatpak
+            engines/stage-tamagotchi-godot/bundle/${{ env.PRODUCT_NAME }}-*.exe
+            engines/stage-tamagotchi-godot/bundle/${{ env.PRODUCT_NAME }}-*.zip
+            engines/stage-tamagotchi-godot/bundle/${{ env.PRODUCT_NAME }}-*.dmg
+            engines/stage-tamagotchi-godot/bundle/${{ env.PRODUCT_NAME }}-*.deb
+            engines/stage-tamagotchi-godot/bundle/${{ env.PRODUCT_NAME }}-*.rpm
+            engines/stage-tamagotchi-godot/bundle/${{ env.PRODUCT_NAME }}-*.flatpak
           append_body: true
