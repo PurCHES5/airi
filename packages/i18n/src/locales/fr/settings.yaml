@@ -9,6 +9,8 @@ animations:
     title: Utiliser les transitions spécifiques à chaque page
 dialogs:
   onboarding:
+    official:
+      title: AIRI Official Provider
     title: Bienvenue dans AIRI!
     description: Configurez votre premier fournisseur d’IA pour commencer.
     selectProvider: Choisissez un fournisseur d'IA.
@@ -152,6 +154,89 @@ pages:
     fluxBalance: Solde de Flux
     viewFluxDetails: Voir les détails
     signedInAs: Connecté en tant que
+    profile:
+      tab: Profile
+      title: Profile
+      description: Manage your public display name.
+      name:
+        label: Display name
+        placeholder: How others see you
+      avatar:
+        gravatarNotice: Avatar from Gravatar.
+        gravatarLink: Manage on gravatar.com
+      action:
+        save: Save changes
+      message:
+        saved: Profile updated.
+      error:
+        fallback: We could not save your changes.
+    connections:
+      tab: Connected accounts
+      title: Connected accounts
+      description: Sign in to AIRI through these providers. Unlink to revoke access, then link again to switch to a different account.
+      status:
+        linked: Linked
+        notLinked: Not linked
+        linkedSince: Linked on {date}
+      action:
+        link: Link
+        unlink: Unlink
+      message:
+        loading: Loading connected accounts...
+        unlinked: '{provider} disconnected.'
+        linked: '{provider} connected.'
+        linkStarted: Redirecting to {provider}…
+      error:
+        listFailed: Could not load connected accounts.
+        unlinkFailed: Could not unlink this account.
+        linkFailed: Could not start the link flow.
+        lastAccount: This is your only sign-in method. Set a password first before unlinking it.
+    security:
+      tab: Security
+      title: Security
+      description: Change your password. Your other devices will be signed out.
+      setDescription: You signed in via a social provider, so there is no current password yet. We'll email a secure link to set one.
+      currentPassword:
+        label: Current password
+        placeholder: Enter your current password
+      newPassword:
+        label: New password
+        placeholder: At least 8 characters
+      confirmPassword:
+        label: Confirm new password
+        placeholder: Repeat your new password
+      action:
+        changePassword: Change password
+        sendSetLink: Email me a link to set my password
+      message:
+        changed: Password changed. Other sessions have been signed out.
+        setLinkSent: Check {email} for the link to set your password.
+      error:
+        fallback: We could not change your password.
+        setLinkFailed: We could not send the password setup link.
+        passwordMismatch: New password and confirmation do not match.
+        passwordSameAsCurrent: New password must differ from the current one.
+    danger:
+      tab: Danger Zone
+      title: Danger Zone
+      description: Irreversible account actions live here.
+      deleteAccount:
+        title: Delete account
+        description: Permanently delete your account and personal data.
+        action: Delete account
+        modal:
+          title: Delete account?
+          warning: This cannot be undone. Active subscription will be canceled, Flux balance cleared.
+          confirmEmail:
+            label: Type your email to confirm
+            placeholder: ''
+            mismatch: Email does not match.
+          confirm: Send confirmation email
+          cancel: Cancel
+        message:
+          emailSent: Check {email} for the deletion link.
+        error:
+          fallback: Could not start deletion. Try again later.
   card:
     activate: Activer
     active: Actif
@@ -222,6 +307,7 @@ pages:
         systemprompt: 'Erreur : veuillez fournir un prompt système.'
         posthistoryinstructions: 'Erreur : le prompt post-historique est requis.'
         invalid_artistry_json: 'Error: Artistry provider options contains invalid JSON.'
+      none: None
     modules: Modules
     name_asc: Nom (A-Z)
     name_desc: Nom (Z-A)
@@ -586,17 +672,88 @@ pages:
       access-token-secret-placeholder: Entrez votre secret de jeton d'accès X / Twitter
       configured: X / Twitter est correctement configuré !
     mcp-server:
-      description: Connecter et gérer le serveur MCP et ses outils
-      title: Serveur MCP
-      config-path: Chemin du fichier de configuration
+      title: MCP servers
+      description: Configure MCP servers and bring their tools into AIRI.
+      config-path: Config file
       runtime-title: État de l'exécution
+      empty: No MCP servers yet — click "Add server" below to create one, or paste a config via "Edit JSON".
+      error-title: Oops
+      success-title: Done!
+      existing:
+        title: Configured
+        description: Servers recorded in mcp.json. Click any row to expand and edit it.
+        empty: Nothing here yet. Add one below!
+      add:
+        title: New
+        description: "Fill in a new server, then click \"Save and restart\" — it'll move into \"Configured\" above."
+        pending-badge: Unsaved
+      status:
+        unknown: not loaded
       actions:
-        open-config: Ouvrir mcp.json
-        apply-and-restart: Enregistrer et redémarrer stdio MCP
+        open-config: Reveal in file manager
+        apply-and-restart: Save and restart
+        restart: Restart MCP
+        add-server: Add server
+        add-env: Add var
+        remove: Remove
+        test: Test
+        edit-json: Edit JSON
+        close-json: Close
+        format-json: Format
+        reset-draft: Reset
+        apply-json: Apply
+        cancel: Cancel
+        expand: Expand
+        collapse: Collapse
+      fields:
+        identifier:
+          label: Identifier
+          description: Unique name; becomes the key in mcp.json.
+          placeholder: e.g. filesystem
+        command:
+          label: Command
+          description: Executable spawned over stdio.
+          placeholder: e.g. npx
+        args:
+          label: Arguments
+          description: One per line, in order.
+          placeholder: "-y\nsome-package-name\n/tmp"
+        cwd:
+          label: Working directory
+          description: Optional directory used as the process working directory.
+          placeholder: e.g. /Users/you/project
+        env:
+          label: Environment
+          description: Vars passed to the child process.
+          key-placeholder: KEY
+          value-placeholder: value
+        enabled:
+          label: Enabled
+      json:
+        title: Edit mcp.json
+        description: 'Edit the raw JSON directly. Click "Apply" to load it into the form, then "Save and restart" to write it to disk.'
+        placeholder: Paste mcp.json here…
+      test:
+        title: Test connection
+        description: We'll spawn the server briefly to check the command works and see what tools it exposes.
+        pick-server-label: Server
+        no-servers: Nothing to test yet
+        no-server-selected: Pick a server first.
+        server-disabled: '"{name}" is disabled — enable it on the card first.'
+        disabled-suffix: disabled
+        untitled: untitled
+        running: Testing…
+        success: Connected! Found {count} tools in {ms}ms.
+        failure: Connection failed after {ms}ms
+      errors:
+        empty-identifier: Server # {index} is missing an identifier.
+        duplicate-identifier: Identifier "{name}" is used more than once — names need to be unique.
+        empty-command: '"{name}" is missing a command.'
+        invalid-shape: That doesn't look like a valid mcp.json — the root needs an "mcpServers" field.
       messages:
-        opened: 'Fichier de configuration ouvert à : {path}'
-        restarted: >-
-          Serveurs MCP redémarrés. Lancés : {started}, en échec : {failed}, ignorés : {skipped}
+        opened: Opened {path} in your file manager
+        json-applied: JSON applied to the form. Click "Save and restart" to persist it to disk.
+        restarted: All restarted! {started} started, {failed} failed, {skipped} skipped.
   flux:
     title: Flux
     buy: Charge
@@ -616,6 +773,7 @@ pages:
       typeAddition: Recharge
       typeConsumption: Utilisation
       typeInitial: Allocation initiale
+      typePromo: Promo Grant
       loading: Chargement de l'historique...
       empty: Aucune transaction pour l'instant.
       loadMore: Charger plus
@@ -1024,6 +1182,9 @@ pages:
       minimax-speech:
         description: minimax.io
         title: MiniMax Speech
+      mimo:
+        description: api.xiaomimimo.com
+        title: Xiaomi MiMo
       mistral:
         description: mistral.ai
         title: Mistral
@@ -1092,6 +1253,15 @@ pages:
               description: ID de l’application du projet, que vous pouvez obtenir dans la Console
               label: ID de l’application
         title: Volcano Engine
+      volcengine-coding-plan:
+        description: Volcengine Coding Plan
+        title: Volcengine Coding Plan
+      byteplus:
+        description: byteplus.com
+        title: BytePlus
+      byteplus-coding-plan:
+        description: BytePlus Coding Plan
+        title: BytePlus Coding Plan
       xai:
         description: x.ai
         title: xAI

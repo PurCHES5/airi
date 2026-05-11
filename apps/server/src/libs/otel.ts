@@ -1,24 +1,28 @@
-import type { Counter, Histogram, UpDownCounter } from '@opentelemetry/api'
+import type { Counter, Histogram, ObservableGauge, UpDownCounter } from '@opentelemetry/api'
+// NOTICE:
+// HTTP server metrics (request duration, active requests) are emitted by
+// `@hono/otel`'s `httpInstrumentationMiddleware` registered in `app.ts`. It
+// records the standard semconv names with the matched Hono route pattern,
+// so we don't create those handles here. We keep the auto HttpInstrumentation
+// for OUTBOUND requests only (LLM gateway, Stripe, Resend) — see
+// `instrumentation.mjs`.
 
 import type { Env } from './env'
 
-import { env as processEnv } from 'node:process'
-
 import { useLogger } from '@guiiai/logg'
-import { diag, DiagConsoleLogger, DiagLogLevel, metrics, trace } from '@opentelemetry/api'
+import { metrics, trace } from '@opentelemetry/api'
 import { logs, SeverityNumber } from '@opentelemetry/api-logs'
-import { OTLPLogExporter } from '@opentelemetry/exporter-logs-otlp-proto'
-import { OTLPMetricExporter } from '@opentelemetry/exporter-metrics-otlp-proto'
-import { OTLPTraceExporter } from '@opentelemetry/exporter-trace-otlp-proto'
-import { RuntimeNodeInstrumentation } from '@opentelemetry/instrumentation-runtime-node'
-import { resourceFromAttributes } from '@opentelemetry/resources'
-import { BatchLogRecordProcessor } from '@opentelemetry/sdk-logs'
-import { PeriodicExportingMetricReader } from '@opentelemetry/sdk-metrics'
-import { NodeSDK } from '@opentelemetry/sdk-node'
-import { BatchSpanProcessor, ParentBasedSampler, TraceIdRatioBasedSampler } from '@opentelemetry/sdk-trace-node'
-import { ATTR_SERVICE_NAME, ATTR_SERVICE_VERSION } from '@opentelemetry/semantic-conventions'
 
 import {
+  METRIC_AIRI_EMAIL_DURATION,
+  METRIC_AIRI_EMAIL_FAILURES,
+  METRIC_AIRI_EMAIL_SEND,
+  METRIC_AIRI_FLUX_CREDITED,
+  METRIC_AIRI_GEN_AI_STREAM_INTERRUPTED,
+  METRIC_AIRI_RATE_LIMIT_BLOCKED,
+  METRIC_AIRI_STRIPE_REVENUE,
+  METRIC_AIRI_TTS_CHARS,
+  METRIC_AIRI_TTS_PREFLIGHT_REJECTIONS,
   METRIC_AUTH_ATTEMPTS,
   METRIC_AUTH_FAILURES,
   METRIC_CHARACTER_CREATED,
@@ -27,12 +31,11 @@ import {
   METRIC_CHAT_MESSAGES,
   METRIC_FLUX_CONSUMED,
   METRIC_FLUX_INSUFFICIENT_BALANCE,
+  METRIC_GEN_AI_CLIENT_FIRST_TOKEN_DURATION,
   METRIC_GEN_AI_CLIENT_OPERATION_COUNT,
   METRIC_GEN_AI_CLIENT_OPERATION_DURATION,
   METRIC_GEN_AI_CLIENT_TOKEN_USAGE_INPUT,
   METRIC_GEN_AI_CLIENT_TOKEN_USAGE_OUTPUT,
-  METRIC_HTTP_SERVER_ACTIVE_REQUESTS,
-  METRIC_HTTP_SERVER_REQUEST_DURATION,
   METRIC_STRIPE_CHECKOUT_COMPLETED,
   METRIC_STRIPE_CHECKOUT_CREATED,
   METRIC_STRIPE_EVENTS,
@@ -48,11 +51,6 @@ import {
 
 const logger = useLogger('otel')
 
-export interface HttpMetrics {
-  requestDuration: Histogram
-  activeRequests: UpDownCounter
-}
-
 export interface AuthMetrics {
   attempts: Counter
   failures: Counter
@@ -66,7 +64,24 @@ export interface EngagementMetrics {
   characterCreated: Counter
   characterDeleted: Counter
   characterEngagement: Counter
-  wsConnectionsActive: UpDownCounter
+  /**
+   * Pull-based gauge for active WebSocket connections.
+   *
+   * Use when:
+   * - Querying current concurrent WS connections in Grafana / alerts.
+   *
+   * Why ObservableGauge instead of UpDownCounter:
+   * - UpDownCounter is delta-based (+1 / -1) and drifts when disconnect
+   *   handlers miss (process crash, SIGKILL, TCP RST, network blackhole).
+   * - ObservableGauge runs a callback at every export interval and reports
+   *   the live registry size, so a missed -1 self-corrects on the next
+   *   scrape instead of leaking forever.
+   *
+   * Expects:
+   * - Caller (`createChatWsHandlers`) registers exactly one callback via
+   *   `addCallback`. Multiple callbacks would double-count.
+   */
+  wsConnectionsActive: ObservableGauge
   wsMessagesSent: Counter
   wsMessagesReceived: Counter
 }
@@ -77,7 +92,11 @@ export interface RevenueMetrics {
   stripePaymentFailed: Counter
   stripeSubscriptionEvent: Counter
   stripeEvents: Counter
+  stripeRevenue: Counter
   fluxInsufficientBalance: Counter
+  fluxCredited: Counter
+  ttsChars: Counter
+  ttsPreflightRejections: Counter
 }
 
 export interface GenAiMetrics {
@@ -86,114 +105,53 @@ export interface GenAiMetrics {
   tokenUsageInput: Counter
   tokenUsageOutput: Counter
   fluxConsumed: Counter
+  firstTokenDuration: Histogram
+  streamInterrupted: Counter
 }
 
-// NOTICE: Database metrics (db.client.operation.duration, redis.client.command.duration) were
-// intentionally removed. PgInstrumentation and IORedisInstrumentation already generate spans
-// with timing for every query/command. To surface these as metrics in Grafana, configure the
-// OTel Collector's spanmetrics connector to derive metrics from those spans.
+export interface EmailMetrics {
+  send: Counter
+  failures: Counter
+  duration: Histogram
+}
+
+export interface RateLimitMetrics {
+  blocked: Counter
+}
 
 export interface OtelInstance {
-  sdk: NodeSDK
-  http: HttpMetrics
   auth: AuthMetrics
   engagement: EngagementMetrics
   revenue: RevenueMetrics
   genAi: GenAiMetrics
-  shutdown: () => Promise<void>
+  email: EmailMetrics
+  rateLimit: RateLimitMetrics
 }
 
-export function initOtel(env: Env): OtelInstance | undefined {
-  const otlpEndpoint = env.OTEL_EXPORTER_OTLP_ENDPOINT
-  const serviceName = env.OTEL_SERVICE_NAME
-
-  if (!otlpEndpoint) {
+/**
+ * Build the structured metric-handle bundle used across the app.
+ *
+ * Use when:
+ * - DI assembly in `apps/server/src/app.ts`. Returns `null` when OTel is
+ *   disabled (no OTLP endpoint), so callers can skip wiring `metrics?.…`.
+ *
+ * Expects:
+ * - `instrumentation.mjs` has already started NodeSDK (loaded via
+ *   `tsx --import ./instrumentation.mjs`). This function does NOT start the
+ *   SDK — it only consumes the global MeterProvider that the preload set up.
+ *   Calling it before the preload runs would yield NoopMeter for everything.
+ *
+ * Returns:
+ * - Metric bundle with primed counters (so low-traffic series show up in
+ *   Prometheus from boot), or `null` when OTel is disabled.
+ */
+export function initOtel(env: Env): OtelInstance | null {
+  if (!env.OTEL_EXPORTER_OTLP_ENDPOINT) {
     logger.log('OpenTelemetry disabled (set OTEL_EXPORTER_OTLP_ENDPOINT to enable)')
-    return
+    return null
   }
 
-  if (env.OTEL_DEBUG === 'true') {
-    diag.setLogger(new DiagConsoleLogger(), DiagLogLevel.DEBUG)
-  }
-
-  // Parse OTEL_EXPORTER_OTLP_HEADERS (format: "key=value,key2=value2")
-  const headers: Record<string, string> = {}
-  const rawHeaders = env.OTEL_EXPORTER_OTLP_HEADERS
-  if (rawHeaders) {
-    for (const pair of rawHeaders.split(',')) {
-      const idx = pair.indexOf('=')
-      if (idx > 0) {
-        headers[pair.slice(0, idx).trim()] = pair.slice(idx + 1).trim()
-      }
-    }
-  }
-
-  const resource = resourceFromAttributes({
-    [ATTR_SERVICE_NAME]: serviceName,
-    [ATTR_SERVICE_VERSION]: processEnv.npm_package_version || '0.0.0',
-    'service.namespace': env.OTEL_SERVICE_NAMESPACE,
-    'deployment.environment': processEnv.NODE_ENV || 'development',
-  })
-
-  const traceExporter = new OTLPTraceExporter({
-    url: `${otlpEndpoint}/v1/traces`,
-    headers,
-  })
-
-  const metricExporter = new OTLPMetricExporter({
-    url: `${otlpEndpoint}/v1/metrics`,
-    headers,
-  })
-
-  const logExporter = new OTLPLogExporter({
-    url: `${otlpEndpoint}/v1/logs`,
-    headers,
-  })
-
-  // Head-based sampling ratio: 1.0 = 100% (default), 0.1 = 10%, etc.
-  // Metrics are always 100% accurate regardless of this setting.
-  const samplingRatio = env.OTEL_TRACES_SAMPLING_RATIO
-  const sampler = new ParentBasedSampler({
-    root: new TraceIdRatioBasedSampler(samplingRatio),
-  })
-
-  const sdk = new NodeSDK({
-    resource,
-    sampler,
-    spanProcessors: [new BatchSpanProcessor(traceExporter)],
-    metricReaders: [new PeriodicExportingMetricReader({
-      exporter: metricExporter,
-      exportIntervalMillis: 15_000,
-      exportTimeoutMillis: 10_000,
-    })],
-    logRecordProcessors: [new BatchLogRecordProcessor(logExporter)],
-    // NOTICE: HttpInstrumentation, PgInstrumentation, and IORedisInstrumentation
-    // are registered in instrumentation.cjs (loaded via --require) so that
-    // require-in-the-middle can patch the CJS modules before tsx's ESM loader
-    // imports them. Only non-patching instrumentations belong here.
-    instrumentations: [
-      new RuntimeNodeInstrumentation(),
-    ],
-  })
-
-  // SDK must start BEFORE metrics.getMeter() — the metrics API does NOT
-  // have a proxy mechanism like traces. getMeter() called before start()
-  // returns a permanent NoopMeter that never upgrades.
-  sdk.start()
-  logger.log(`OpenTelemetry initialized, exporting to ${otlpEndpoint}, sampling ratio: ${samplingRatio}`)
-
-  const meter = metrics.getMeter(serviceName)
-
-  // HTTP metrics (semconv: unit MUST be seconds)
-  const http: HttpMetrics = {
-    requestDuration: meter.createHistogram(METRIC_HTTP_SERVER_REQUEST_DURATION, {
-      description: 'HTTP server request duration',
-      unit: 's',
-    }),
-    activeRequests: meter.createUpDownCounter(METRIC_HTTP_SERVER_ACTIVE_REQUESTS, {
-      description: 'Number of active HTTP requests',
-    }),
-  }
+  const meter = metrics.getMeter(env.OTEL_SERVICE_NAME)
 
   // Auth & User metrics
   const auth: AuthMetrics = {
@@ -228,8 +186,8 @@ export function initOtel(env: Env): OtelInstance | undefined {
     characterEngagement: meter.createCounter(METRIC_CHARACTER_ENGAGEMENT, {
       description: 'Number of character engagement actions (like/bookmark)',
     }),
-    wsConnectionsActive: meter.createUpDownCounter(METRIC_WS_CONNECTIONS_ACTIVE, {
-      description: 'Active WebSocket connections',
+    wsConnectionsActive: meter.createObservableGauge(METRIC_WS_CONNECTIONS_ACTIVE, {
+      description: 'Active WebSocket connections (live registry size, scraped per export interval)',
     }),
     wsMessagesSent: meter.createCounter(METRIC_WS_MESSAGES_SENT, {
       description: 'Messages sent via WebSocket',
@@ -256,8 +214,21 @@ export function initOtel(env: Env): OtelInstance | undefined {
     stripeEvents: meter.createCounter(METRIC_STRIPE_EVENTS, {
       description: 'Number of Stripe webhook events processed',
     }),
+    stripeRevenue: meter.createCounter(METRIC_AIRI_STRIPE_REVENUE, {
+      description: 'Stripe revenue in smallest currency unit (e.g. cents)',
+      unit: 'minor_unit',
+    }),
     fluxInsufficientBalance: meter.createCounter(METRIC_FLUX_INSUFFICIENT_BALANCE, {
       description: 'Number of insufficient flux balance errors',
+    }),
+    fluxCredited: meter.createCounter(METRIC_AIRI_FLUX_CREDITED, {
+      description: 'Total flux credited to user balances, by source',
+    }),
+    ttsChars: meter.createCounter(METRIC_AIRI_TTS_CHARS, {
+      description: 'TTS input characters processed (billing base unit)',
+    }),
+    ttsPreflightRejections: meter.createCounter(METRIC_AIRI_TTS_PREFLIGHT_REJECTIONS, {
+      description: 'Pre-flight rejections from flux-meter assertCanAfford',
     }),
   }
 
@@ -279,28 +250,76 @@ export function initOtel(env: Env): OtelInstance | undefined {
     fluxConsumed: meter.createCounter(METRIC_FLUX_CONSUMED, {
       description: 'Total flux consumed',
     }),
+    firstTokenDuration: meter.createHistogram(METRIC_GEN_AI_CLIENT_FIRST_TOKEN_DURATION, {
+      description: 'Time from request start to first streamed token (TTFB for streaming)',
+      unit: 's',
+    }),
+    streamInterrupted: meter.createCounter(METRIC_AIRI_GEN_AI_STREAM_INTERRUPTED, {
+      description: 'Streaming responses interrupted before completion',
+    }),
   }
 
-  // Graceful shutdown
-  const shutdown = async () => {
-    try {
-      await sdk.shutdown()
-      logger.log('OpenTelemetry shut down successfully')
-    }
-    catch (err) {
-      logger.withError(err).error('Error shutting down OpenTelemetry')
-    }
+  const email: EmailMetrics = {
+    send: meter.createCounter(METRIC_AIRI_EMAIL_SEND, {
+      description: 'Transactional emails accepted by Resend',
+    }),
+    failures: meter.createCounter(METRIC_AIRI_EMAIL_FAILURES, {
+      description: 'Transactional email send failures',
+    }),
+    duration: meter.createHistogram(METRIC_AIRI_EMAIL_DURATION, {
+      description: 'Email provider call duration',
+      unit: 's',
+    }),
   }
 
-  return {
-    sdk,
-    http,
-    auth,
-    engagement,
-    revenue,
-    genAi,
-    shutdown,
+  const rateLimit: RateLimitMetrics = {
+    blocked: meter.createCounter(METRIC_AIRI_RATE_LIMIT_BLOCKED, {
+      description: 'Requests blocked by rate limiter',
+    }),
   }
+
+  // NOTICE:
+  // OTel SDK only emits a Counter time series after .add() runs the first time.
+  // Without this priming step, low-traffic counters (auth_failures_total,
+  // stripe_*_total, payment_failed, ...) never appear in Prometheus / Grafana
+  // until an event happens — making panels look broken on fresh deploys and
+  // making absence-based alerts impossible to author. add(0) registers the
+  // series with a baseline of 0 without distorting any rates.
+  // Removal condition: OTel SDK changes default to register Counters at create
+  // time (https://github.com/open-telemetry/opentelemetry-specification/issues/2298).
+  const counters = [
+    auth.attempts,
+    auth.failures,
+    auth.userRegistered,
+    auth.userLogin,
+    engagement.chatMessages,
+    engagement.characterCreated,
+    engagement.characterDeleted,
+    engagement.characterEngagement,
+    engagement.wsMessagesSent,
+    engagement.wsMessagesReceived,
+    revenue.stripeCheckoutCreated,
+    revenue.stripeCheckoutCompleted,
+    revenue.stripePaymentFailed,
+    revenue.stripeSubscriptionEvent,
+    revenue.stripeEvents,
+    revenue.stripeRevenue,
+    revenue.fluxInsufficientBalance,
+    revenue.fluxCredited,
+    revenue.ttsChars,
+    revenue.ttsPreflightRejections,
+    genAi.operationCount,
+    genAi.tokenUsageInput,
+    genAi.tokenUsageOutput,
+    genAi.fluxConsumed,
+    genAi.streamInterrupted,
+    email.send,
+    email.failures,
+    rateLimit.blocked,
+  ]
+  for (const counter of counters) counter.add(0)
+
+  return { auth, engagement, revenue, genAi, email, rateLimit }
 }
 
 const severityMap: Record<string, SeverityNumber> = {
