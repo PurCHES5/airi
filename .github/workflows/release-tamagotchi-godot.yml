@@ -69,7 +69,6 @@ jobs:
             extension: "dmg"
 
     steps:
-      # Step 1: Logic to determine if this matrix instance should run
       - name: Check Platform Filter
         id: filter
         shell: bash
@@ -114,7 +113,6 @@ jobs:
         shell: bash
         working-directory: ${{ env.PROJECT_PATH }}
         run: |
-          # 1. Resolve Version
           if [ -n "${{ github.event.inputs.tag }}" ]; then
             VERSION="${{ github.event.inputs.tag }}"
           elif [ -n "${{ github.event.release.tag_name }}" ]; then
@@ -124,20 +122,17 @@ jobs:
           fi
           VERSION=${VERSION#v}
           
-          # 2. Resolve Architecture
           ARCH="x64"
           if [[ "${{ matrix.os }}" == *"arm"* ]] || [[ "${{ runner.arch }}" == "ARM64" ]]; then
             ARCH="arm64"
           fi
 
-          # 3. Construct Filename
           BUNDLE_NAME="${{ env.PRODUCT_NAME }}-${VERSION}-${{ matrix.platform_label }}-${ARCH}.${{ matrix.extension }}"
           echo "BUNDLE_NAME=$BUNDLE_NAME" >> $GITHUB_ENV
           echo "VERSION=$VERSION" >> $GITHUB_ENV
           
           mkdir -p bundle
 
-          # 4. Platform-Specific Packaging
           if [ "${{ matrix.platform_label }}" == "linux" ]; then
             zip -rj "bundle/$BUNDLE_NAME" build/linux/
           elif [ "${{ matrix.platform_label }}" == "macos" ]; then
