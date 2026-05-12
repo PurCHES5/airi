@@ -5,7 +5,7 @@ permissions:
   actions: read
 
 env:
-  PRODUCT_NAME: 'AIRI' # Standardized product name for filenames
+  PRODUCT_NAME: 'AIRI'
   PROJECT_PATH: 'engines/stage-tamagotchi-godot'
 
 on:
@@ -64,7 +64,7 @@ jobs:
       - name: Setup Godot
         uses: chickensoft-games/setup-godot@v2
         with:
-          version: 4.3.0 # Match your project.godot version
+          version: 4.6.2
           use-dotnet: true
 
       - name: Build Godot Project
