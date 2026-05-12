@@ -5,12 +5,8 @@ permissions:
   actions: read
 
 env:
-  BUNDLE_NAME: ''
-  DEB_BUNDLE_NAME: ''
-  RPM_BUNDLE_NAME: ''
-  FLATPAK_BUNDLE_NAME: ''
-  PRODUCT_NAME: 'AIRI'
-  VERSION: ''
+  PRODUCT_NAME: 'AIRI' # Standardized product name for filenames
+  PROJECT_PATH: 'engines/stage-tamagotchi-godot'
 
 on:
   release:
@@ -18,497 +14,136 @@ on:
       - prereleased
   workflow_dispatch:
     inputs:
-      build_only:
-        description: Build only
-        required: false
-        default: false
-        type: boolean
-      artifacts_only:
-        description: Build and upload artifacts only
-        required: false
-        default: false
-        type: boolean
       tag:
-        description: Specific tag/commit for the release (leave empty to auto-detect latest tag)
+        description: 'Specific tag/version (e.g. 0.10.2). Leave empty for package.json version'
         required: false
         type: string
-      platform:
-        description: Platform
-        type: choice
-        options:
-          - all
-          - windows
-          - macos
-          - linux
   schedule:
     - cron: '0 0 * * *'
 
 jobs:
   build:
-    name: Build
-    continue-on-error: ${{ matrix.skip }}
-    env:
-      VITE_ENABLE_POSTHOG: ${{ ((github.event_name == 'release') || (github.event_name == 'workflow_dispatch' && !inputs.build_only)) && 'true' || 'false' }}
+    name: Build (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
     strategy:
+      fail-fast: false
       matrix:
         include:
-          - os: macos-15-intel
-            artifact: darwin-x64
-            target: x86_64-apple-darwin
-            arch: x64
-            godot_preset: "macOS"
-            skip: ${{ inputs.platform != '' && inputs.platform != 'all' && inputs.platform != 'macos' }}
-
-          - os: macos-26
-            artifact: darwin-arm64
-            target: aarch64-apple-darwin
-            arch: arm64
-            godot_preset: "macOS"
-            skip: ${{ inputs.platform != '' && inputs.platform != 'all' && inputs.platform != 'macos' }}
-
-          - os: ubuntu-latest
-            artifact: linux-x64
-            target: x86_64-unknown-linux-gnu
-            arch: x64
-            godot_preset: "Linux/X11"
-            skip: ${{ inputs.platform != '' && inputs.platform != 'all' && inputs.platform != 'linux' }}
-
-          - os: ubuntu-24.04-arm
-            artifact: linux-arm64
-            target: aarch64-unknown-linux-gnu
-            arch: arm64
-            godot_preset: "Linux/X11"
-            skip: ${{ inputs.platform != '' && inputs.platform != 'all' && inputs.platform != 'linux' }}
-
           - os: windows-latest
-            artifact: windows-x64-setup
-            target: x86_64-pc-windows-msvc
-            arch: x64
-            godot_preset: "Windows Desktop"
-            skip: ${{ inputs.platform != '' && inputs.platform != 'all' && inputs.platform != 'windows' }}
+            platform: win
+            export_preset: "Windows Desktop"
+            output_path: "build/win/godot-stage.exe"
+            extension: "exe"
+          - os: ubuntu-latest
+            platform: linux
+            export_preset: "Linux"
+            output_path: "build/linux/godot-stage"
+            extension: "zip"
+          - os: ubuntu-24.04-arm
+            platform: linux
+            export_preset: "Linux"
+            output_path: "build/linux/godot-stage"
+            extension: "zip"
+          - os: macos-latest
+            platform: macos
+            export_preset: "macOS"
+            output_path: "build/mac/godot-stage.app"
+            extension: "dmg"
 
-    runs-on: ${{ matrix.os }}
     steps:
-      - name: Skip the build (fail fast)
-        run: |
-          echo "Skipping build for ${{ matrix.os }}..."
-          echo "This will fail the job, but don't panic—this is expected when not building for all."
-          echo "This will be improved in the future."
-          exit ${{ matrix.skip && '1' || '0' }}
-
-      - name: Free Disk Space
-        if: matrix.os == 'ubuntu-latest' || matrix.os == 'ubuntu-24.04-arm'
-        uses: jlumbroso/free-disk-space@main
-
-      - uses: actions/checkout@v6
-
-      - name: macOS Select Xcode 26.2
-        if: matrix.os == 'macos-15-intel' || matrix.os == 'macos-26'
-        run: |
-          sudo xcode-select -s /Applications/Xcode_26.2.app
-          xcodebuild -version
-
-      - name: macOS Show Toolchain
-        if: matrix.os == 'macos-15-intel' || matrix.os == 'macos-26'
-        run: |
-          xcodebuild -version
-          actool --version
-
-      - uses: pnpm/action-setup@v4
+      - name: Checkout
+        uses: actions/checkout@v4
         with:
-          run_install: false
-      
-      - uses: actions/setup-node@v6
-        with:
-          node-version: lts/*
-          cache: pnpm
-      
-      - run: pnpm install --frozen-lockfile
-
-      # ---------
-      # Framework Tooling Setup
-      # ---------
+          submodules: recursive
 
       - name: Setup .NET
         uses: actions/setup-dotnet@v4
         with:
-          dotnet-version: '8.0.x' 
+          dotnet-version: '8.0.x'
 
       - name: Setup Godot
         uses: chickensoft-games/setup-godot@v2
         with:
-          version: '4.6.2'
+          version: 4.3.0 # Match your project.godot version
           use-dotnet: true
 
-      # ---------
-      # Build
-      # ---------
-
-      - run: pnpm run build:packages
-
-      - name: Build (Windows Only)
-        if: matrix.os == 'windows-latest'
-        working-directory: engines\stage-tamagotchi-godot
+      - name: Build Godot Project
+        shell: bash
         run: |
+          cd ${{ env.PROJECT_PATH }}
+          mkdir -p build/win build/linux build/mac
+          godot --headless --export-release "${{ matrix.export_preset }}" ${{ matrix.output_path }}
+
+      - name: Resolve Metadata and Bundle
+        shell: bash
+        working-directory: ${{ env.PROJECT_PATH }}
+        run: |
+          if [ -n "${{ github.event.inputs.tag }}" ]; then
+            VERSION="${{ github.event.inputs.tag }}"
+          elif [ -n "${{ github.event.release.tag_name }}" ]; then
+            VERSION="${{ github.event.release.tag_name }}"
+          else
+            VERSION=$(jq -r '.version' package.json)
+          fi
+          VERSION=${VERSION#v} # Strip 'v' prefix if present
+          
+          ARCH="x64"
+          if [[ "${{ matrix.os }}" == *"arm"* ]] || [[ "${{ runner.arch }}" == "ARM64" ]]; then
+            ARCH="arm64"
+          fi
+
+          # Pattern: PRODUCT-VERSION-PLATFORM-ARCH.EXT
+          BUNDLE_NAME="${{ env.PRODUCT_NAME }}-${VERSION}-${{ matrix.platform }}-${ARCH}.${{ matrix.extension }}"
+          
+          echo "Final Bundle Name: $BUNDLE_NAME"
           mkdir -p bundle
-          godot --headless --export-release "${{ matrix.godot_preset }}" bundle/${{ env.PRODUCT_NAME }}.exe
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Build (macOS Only)
-        if: matrix.os == 'macos-15-intel' || matrix.os == 'macos-26'
-        working-directory: engines/stage-tamagotchi-godot
-        run: |
-          echo "$CSC_CONTENT" | base64 --decode > apple-developer-code-signing.p12
-          export CSC_LINK="./apple-developer-code-signing.p12"
-          mkdir -p bundle
-          godot --headless --export-release "${{ matrix.godot_preset }}" bundle/${{ env.PRODUCT_NAME }}.dmg
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          CSC_CONTENT: ${{ secrets.CSC_CONTENT }}
-          CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
-          APPLE_ID: ${{ secrets.APPLE_DEVELOPER_APPLE_ID }}
-          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_DEVELOPER_APPLE_APP_SPECIFIC_PASSWORD }}
-          APPLE_TEAM_ID: ${{ secrets.APPLE_DEVELOPER_TEAM_ID }}
+          if [ "${{ matrix.platform }}" == "linux" ]; then
+            # Linux needs zipping because Godot exports a binary + .pck (if not embedded)
+            zip -rj "bundle/$BUNDLE_NAME" build/linux/
+          elif [ "${{ matrix.platform }}" == "macos" ]; then
+            # Simple DMG creation for macOS
+            hdiutil create -volname "${{ env.PRODUCT_NAME }}" -srcfolder "${{ matrix.output_path }}" -ov -format UDZO "bundle/$BUNDLE_NAME"
+          else
+            # Windows
+            cp "${{ matrix.output_path }}" "bundle/$BUNDLE_NAME"
+          fi
 
-      - name: Build (Linux Only)
-        if: matrix.os == 'ubuntu-latest' || matrix.os == 'ubuntu-24.04-arm'
-        working-directory: engines/stage-tamagotchi-godot
-        run: |
-          mkdir -p bundle
-          godot --headless --export-release "${{ matrix.godot_preset }}" bundle/${{ env.PRODUCT_NAME }}.x86_64
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Export for subsequent steps
+          echo "BUNDLE_NAME=$BUNDLE_NAME" >> $GITHUB_ENV
+          echo "VERSION=$VERSION" >> $GITHUB_ENV
 
-      - name: Setup Flatpak (Linux Only)
-        if: ${{ matrix.os == 'ubuntu-latest' || matrix.os == 'ubuntu-24.04-arm' }}
-        run: |
-          sudo apt update
-          sudo apt install -y flatpak flatpak-builder elfutils
-          flatpak --version
-          flatpak --user remote-add --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo
-
-      - name: Build Flatpak (Linux Only)
-        if: ${{ matrix.os == 'ubuntu-latest' || matrix.os == 'ubuntu-24.04-arm' }}
-        working-directory: engines/stage-tamagotchi-godot
-        run: |
-          mkdir -p dist
-          flatpak-builder --user --install-deps-from=flathub ./flatpak ai.moeru.airi.flatpak.yml --force-clean
-          flatpak build-export ./flatpak-repo ./flatpak
-          export FLATPAK_OUTPUT_NAME=$(pnpm exec tsx scripts/artifacts-metadata.ts ${{ matrix.target }} --get-output-filename flatpak)
-          flatpak build-bundle ./flatpak-repo dist/${FLATPAK_OUTPUT_NAME} ai.moeru.airi
-
-      # ---------
-      # Nightly (schedule) builds only
-      # ---------
-
-      - name: Get Artifacts Envs (Nightly + Windows Only)
-        if: ${{ github.event_name == 'schedule' && matrix.os == 'windows-latest' }}
-        working-directory: engines\stage-tamagotchi-godot
-        run: |
-          echo "BUNDLE_NAME=$(pnpm exec tsx scripts/artifacts-metadata.ts ${{ matrix.target }} --get-bundle-name)" >> $env:GITHUB_ENV
-          echo "VERSION=$(pnpm exec tsx scripts/artifacts-metadata.ts ${{ matrix.target }} --get-version)" >> $env:GITHUB_ENV
-
-      - name: Get Artifacts Envs (Nightly + Non-Windows)
-        if: ${{ github.event_name == 'schedule' && matrix.os != 'windows-latest' }}
-        working-directory: engines/stage-tamagotchi-godot
-        run: |
-          echo "VERSION=$(pnpm exec tsx scripts/artifacts-metadata.ts ${{ matrix.target }} --get-version)" >> $GITHUB_ENV
-
-      - name: Get Artifacts Envs (Nightly + macOS Only)
-        if: ${{ github.event_name == 'schedule' && (matrix.os == 'macos-26' || matrix.os == 'macos-15-intel') }}
-        working-directory: engines/stage-tamagotchi-godot
-        run: |
-          echo "BUNDLE_NAME=$(pnpm exec tsx scripts/artifacts-metadata.ts ${{ matrix.target }} --get-bundle-name)" >> $GITHUB_ENV
-
-      - name: Rename Artifacts (Nightly)
-        if: ${{ github.event_name == 'schedule' }}
-        run:
-          pnpm run -F @proj-airi/stage-tamagotchi-godot rename-artifacts ${{ matrix.target }}
-
-      - name: Get Linux Artifact Names (Nightly + Linux Only)
-        if: ${{ github.event_name == 'schedule' && (matrix.os == 'ubuntu-latest' || matrix.os == 'ubuntu-24.04-arm') }}
-        working-directory: engines/stage-tamagotchi-godot
-        run: |
-          echo "DEB_BUNDLE_NAME=$(pnpm exec tsx scripts/artifacts-metadata.ts ${{ matrix.target }} --get-filename deb)" >> $GITHUB_ENV
-          echo "RPM_BUNDLE_NAME=$(pnpm exec tsx scripts/artifacts-metadata.ts ${{ matrix.target }} --get-filename rpm)" >> $GITHUB_ENV
-          echo "FLATPAK_BUNDLE_NAME=$(pnpm exec tsx scripts/artifacts-metadata.ts ${{ matrix.target }} --get-filename flatpak)" >> $GITHUB_ENV
-
-      - name: Upload Artifacts (Nightly + Non-Linux)
-        if: ${{ github.event_name == 'schedule' && (matrix.os != 'ubuntu-latest' && matrix.os != 'ubuntu-24.04-arm') }}
-        id: unsigned-artifacts-nightly
-        uses: actions/upload-artifact@v7
+      - name: Upload Distribution Artifact
+        uses: actions/upload-artifact@v4
         with:
-          name: ${{ env.BUNDLE_NAME }}
-          path: engines/stage-tamagotchi-godot/bundle/${{ env.BUNDLE_NAME }}
+          name: distribution-${{ matrix.platform }}-${{ strategy.job-index }}
+          path: ${{ env.PROJECT_PATH }}/bundle/${{ env.BUNDLE_NAME }}
 
-      - name: Upload Artifacts (Nightly + Linux deb)
-        if: ${{ github.event_name == 'schedule' && (matrix.os == 'ubuntu-latest' || matrix.os == 'ubuntu-24.04-arm') }}
-        uses: actions/upload-artifact@v7
-        with:
-          name: ${{ env.DEB_BUNDLE_NAME }}
-          path: engines/stage-tamagotchi-godot/bundle/${{ env.DEB_BUNDLE_NAME }}
-
-      - name: Upload Artifacts (Nightly + Linux rpm)
-        if: ${{ github.event_name == 'schedule' && (matrix.os == 'ubuntu-latest' || matrix.os == 'ubuntu-24.04-arm') }}
-        uses: actions/upload-artifact@v7
-        with:
-          name: ${{ env.RPM_BUNDLE_NAME }}
-          path: engines/stage-tamagotchi-godot/bundle/${{ env.RPM_BUNDLE_NAME }}
-
-      - name: Upload Flatpak Artifact (Nightly + Linux Only)
-        if: ${{ github.event_name == 'schedule' && (matrix.os == 'ubuntu-latest' || matrix.os == 'ubuntu-24.04-arm') }}
-        uses: actions/upload-artifact@v7
-        with:
-          name: ${{ env.FLATPAK_BUNDLE_NAME }}
-          path: engines/stage-tamagotchi-godot/bundle/${{ env.FLATPAK_BUNDLE_NAME }}
-
-      - name: Sign Windows Artifacts with SignPath (Nightly + Windows Only)
-        id: signpath-nightly-windows
-        continue-on-error: true
-        uses: signpath/github-action-submit-signing-request@v2
-        if: ${{ github.event_name == 'schedule' && (matrix.os == 'windows-latest' && github.repository == 'moeru-ai/airi') }}
-        with:
-          api-token: '${{ secrets.SIGNPATH_API_TOKEN }}'
-          organization-id: '${{ secrets.SIGNPATH_ORGANIZATION_ID }}'
-          project-slug: 'airi'
-          signing-policy-slug: 'test-signing'
-          artifact-configuration-slug: ci-github-actions-artifacts-windows
-          github-artifact-id: '${{ steps.unsigned-artifacts-nightly.outputs.artifact-id }}'
-          wait-for-completion: true
-          wait-for-completion-timeout-in-seconds: 900
-          download-signed-artifact-timeout-in-seconds: 900
-          output-artifact-directory: engines\stage-tamagotchi-godot\bundle\signed\windows\
-
-      - name: Warn When Windows Signing Fails (Nightly)
-        if: ${{ github.event_name == 'schedule' && matrix.os == 'windows-latest' && steps.signpath-nightly-windows.outcome != 'success' }}
-        run: |
-          echo "::warning::SignPath Windows signing failed for nightly build. Continuing with unsigned artifact at engines/stage-tamagotchi-godot/bundle/${{ env.BUNDLE_NAME }}."
-
-      - name: Upload Signed Artifacts (Nightly + Non-Linux)
-        if: ${{ github.event_name == 'schedule' && matrix.os == 'windows-latest' && steps.signpath-nightly-windows.outcome == 'success' }}
-        uses: actions/upload-artifact@v7
-        with:
-          name: ${{ env.BUNDLE_NAME }}
-          path: engines/stage-tamagotchi-godot/bundle/signed/windows/${{ env.BUNDLE_NAME }}
-          overwrite: true
-
-      - name: Upload Unsigned Windows Artifacts Fallback (Nightly)
-        if: ${{ github.event_name == 'schedule' && matrix.os == 'windows-latest' && steps.signpath-nightly-windows.outcome != 'success' }}
-        uses: actions/upload-artifact@v7
-        with:
-          name: ${{ env.BUNDLE_NAME }}
-          path: engines/stage-tamagotchi-godot/bundle/${{ env.BUNDLE_NAME }}
-          overwrite: true
-
-      # ---------
-      # Workflow Dispatch only
-      # ---------
-
-      - name: Get Artifacts Envs (Manual + Windows Only)
-        if: ${{ github.event_name == 'workflow_dispatch' && matrix.os == 'windows-latest' }}
-        working-directory: engines\stage-tamagotchi-godot
-        run: |
-          echo "BUNDLE_NAME=$(pnpm exec tsx scripts/artifacts-metadata.ts ${{ matrix.target }} --get-bundle-name --release ${{ !inputs.build_only && !inputs.artifacts_only }} --tag ${{ inputs.tag }} --auto-tag ${{ !inputs.build_only }})" >> $env:GITHUB_ENV
-          echo "VERSION=$(pnpm exec tsx scripts/artifacts-metadata.ts ${{ matrix.target }} --get-version --release ${{ !inputs.build_only && !inputs.artifacts_only }} --tag ${{ inputs.tag }} --auto-tag ${{ !inputs.build_only }})" >> $env:GITHUB_ENV
-
-      - name: Get Artifacts Envs (Manual + Non-Windows)
-        if: ${{ github.event_name == 'workflow_dispatch' && matrix.os != 'windows-latest' }}
-        working-directory: engines/stage-tamagotchi-godot
-        run: |
-          echo "VERSION=$(pnpm exec tsx scripts/artifacts-metadata.ts ${{ matrix.target }} --get-version --release ${{ !inputs.build_only && !inputs.artifacts_only }} --tag ${{ inputs.tag }} --auto-tag ${{ !inputs.build_only }})" >> $GITHUB_ENV
-
-      - name: Get Artifacts Envs (Manual + macOS Only)
-        if: ${{ github.event_name == 'workflow_dispatch' && (matrix.os == 'macos-26' || matrix.os == 'macos-15-intel') }}
-        working-directory: engines/stage-tamagotchi-godot
-        run: |
-          echo "BUNDLE_NAME=$(pnpm exec tsx scripts/artifacts-metadata.ts ${{ matrix.target }} --get-bundle-name --release ${{ !inputs.build_only && !inputs.artifacts_only }} --tag ${{ inputs.tag }} --auto-tag ${{ !inputs.build_only }})" >> $GITHUB_ENV
-
-      - name: Rename Artifacts (Manual)
-        if: ${{ github.event_name == 'workflow_dispatch' }}
-        run: |
-          pnpm run -F @proj-airi/stage-tamagotchi-godot rename-artifacts ${{ matrix.target }} --release ${{ !inputs.build_only && !inputs.artifacts_only }} --tag ${{ inputs.tag }} --auto-tag ${{ !inputs.build_only }}
-
-      - name: Get Linux Artifact Names (Manual + Non-Release + Linux Only)
-        if: ${{ github.event_name == 'workflow_dispatch' && !inputs.build_only && inputs.artifacts_only && (matrix.os == 'ubuntu-latest' || matrix.os == 'ubuntu-24.04-arm') }}
-        working-directory: engines/stage-tamagotchi-godot
-        run: |
-          echo "DEB_BUNDLE_NAME=$(pnpm exec tsx scripts/artifacts-metadata.ts ${{ matrix.target }} --get-filename deb --release ${{ !inputs.build_only && !inputs.artifacts_only }} --tag ${{ inputs.tag }} --auto-tag ${{ !inputs.build_only }})" >> $GITHUB_ENV
-          echo "RPM_BUNDLE_NAME=$(pnpm exec tsx scripts/artifacts-metadata.ts ${{ matrix.target }} --get-filename rpm --release ${{ !inputs.build_only && !inputs.artifacts_only }} --tag ${{ inputs.tag }} --auto-tag ${{ !inputs.build_only }})" >> $GITHUB_ENV
-          echo "FLATPAK_BUNDLE_NAME=$(pnpm exec tsx scripts/artifacts-metadata.ts ${{ matrix.target }} --get-filename flatpak --release ${{ !inputs.build_only && !inputs.artifacts_only }} --tag ${{ inputs.tag }} --auto-tag ${{ !inputs.build_only }})" >> $GITHUB_ENV
-
-      - name: Upload Artifacts (Manual + Non-Release + Non-Linux)
-        if: ${{ github.event_name == 'workflow_dispatch' && !inputs.build_only && inputs.artifacts_only && (matrix.os != 'ubuntu-latest' && matrix.os != 'ubuntu-24.04-arm') }}
-        id: unsigned-artifacts-workflow-dispatch
-        uses: actions/upload-artifact@v7
-        with:
-          name: ${{ env.BUNDLE_NAME }}
-          path: engines/stage-tamagotchi-godot/bundle/${{ env.BUNDLE_NAME }}
-
-      - name: Upload Artifacts (Manual + Non-Release + Linux deb)
-        if: ${{ github.event_name == 'workflow_dispatch' && !inputs.build_only && inputs.artifacts_only && (matrix.os == 'ubuntu-latest' || matrix.os == 'ubuntu-24.04-arm') }}
-        uses: actions/upload-artifact@v7
-        with:
-          name: ${{ env.DEB_BUNDLE_NAME }}
-          path: engines/stage-tamagotchi-godot/bundle/${{ env.DEB_BUNDLE_NAME }}
-
-      - name: Upload Artifacts (Manual + Non-Release + Linux rpm)
-        if: ${{ github.event_name == 'workflow_dispatch' && !inputs.build_only && inputs.artifacts_only && (matrix.os == 'ubuntu-latest' || matrix.os == 'ubuntu-24.04-arm') }}
-        uses: actions/upload-artifact@v7
-        with:
-          name: ${{ env.RPM_BUNDLE_NAME }}
-          path: engines/stage-tamagotchi-godot/bundle/${{ env.RPM_BUNDLE_NAME }}
-
-      - name: Upload Flatpak Artifact (Manual + Non-Release + Linux)
-        if: ${{ github.event_name == 'workflow_dispatch' && !inputs.build_only && inputs.artifacts_only && (matrix.os == 'ubuntu-latest' || matrix.os == 'ubuntu-24.04-arm') }}
-        uses: actions/upload-artifact@v7
-        with:
-          name: ${{ env.FLATPAK_BUNDLE_NAME }}
-          path: engines/stage-tamagotchi-godot/bundle/${{ env.FLATPAK_BUNDLE_NAME }}
-
-      - name: Sign Windows Artifacts with SignPath (Manual + Windows Only)
-        id: signpath-manual-windows
-        continue-on-error: true
-        uses: signpath/github-action-submit-signing-request@v2
-        if: ${{ github.event_name == 'workflow_dispatch' && !inputs.build_only && inputs.artifacts_only && (matrix.os == 'windows-latest' && github.repository == 'moeru-ai/airi') }}
-        with:
-          api-token: '${{ secrets.SIGNPATH_API_TOKEN }}'
-          organization-id: '${{ secrets.SIGNPATH_ORGANIZATION_ID }}'
-          project-slug: 'airi'
-          signing-policy-slug: 'test-signing'
-          artifact-configuration-slug: ci-github-actions-artifacts-windows
-          github-artifact-id: '${{ steps.unsigned-artifacts-workflow-dispatch.outputs.artifact-id }}'
-          wait-for-completion: true
-          wait-for-completion-timeout-in-seconds: 900
-          download-signed-artifact-timeout-in-seconds: 900
-          output-artifact-directory: engines\stage-tamagotchi-godot\bundle\signed\windows\
-
-      - name: Warn When Windows Signing Fails (Manual)
-        if: ${{ github.event_name == 'workflow_dispatch' && !inputs.build_only && inputs.artifacts_only && matrix.os == 'windows-latest' && steps.signpath-manual-windows.outcome != 'success' }}
-        run: |
-          echo "::warning::SignPath Windows signing failed for workflow_dispatch artifact build. Continuing with unsigned artifact at engines/stage-tamagotchi-godot/bundle/${{ env.BUNDLE_NAME }}."
-
-      - name: Move Signed Artifacts (Manual + Release + Windows Only)
-        if: ${{ github.event_name == 'workflow_dispatch' && !inputs.build_only && inputs.artifacts_only && matrix.os == 'windows-latest' && steps.signpath-manual-windows.outcome == 'success' }}
-        run: |
-          Move-Item -Force engines/stage-tamagotchi-godot/bundle/signed/windows/${{ env.BUNDLE_NAME }} engines/stage-tamagotchi-godot/bundle/${{ env.BUNDLE_NAME }}
-
-      - name: Upload Signed Artifacts (Manual + Windows Only)
-        if: ${{ github.event_name == 'workflow_dispatch' && !inputs.build_only && inputs.artifacts_only && (matrix.os == 'windows-latest') }}
-        uses: actions/upload-artifact@v7
-        with:
-          name: ${{ env.BUNDLE_NAME }}
-          path: engines\stage-tamagotchi-godot\bundle\${{ env.BUNDLE_NAME }}
-          overwrite: true
-
-      - name: Upload To GitHub Releases (Manual + Release + Overwrite Release)
-        if: ${{ github.event_name == 'workflow_dispatch' && !inputs.build_only && !inputs.artifacts_only }}
-        uses: softprops/action-gh-release@v2
-        with:
-          files: |
-            engines/stage-tamagotchi-godot/bundle/${{ env.PRODUCT_NAME }}-*.exe
-            engines/stage-tamagotchi-godot/bundle/${{ env.PRODUCT_NAME }}-*.zip
-            engines/stage-tamagotchi-godot/bundle/${{ env.PRODUCT_NAME }}-*.dmg
-            engines/stage-tamagotchi-godot/bundle/${{ env.PRODUCT_NAME }}-*.deb
-            engines/stage-tamagotchi-godot/bundle/${{ env.PRODUCT_NAME }}-*.rpm
-            engines/stage-tamagotchi-godot/bundle/${{ env.PRODUCT_NAME }}-*.flatpak
-          append_body: true
-          tag_name: ${{ inputs.tag }}
-
-      # ---------
-      # Version push
-      # ---------
-
-      - name: Rename Artifacts (Automatic)
-        if: ${{ github.event_name == 'release' }}
-        run: |
-          pnpm run -F @proj-airi/stage-tamagotchi-godot rename-artifacts ${{ matrix.target }} --release --auto-tag
-
-      - name: Get Artifacts Envs (Automatic + Windows Only)
-        if: ${{ github.event_name == 'release' && matrix.os == 'windows-latest' }}
-        working-directory: engines/stage-tamagotchi-godot
-        run: |
-          echo "BUNDLE_NAME=$(pnpm exec tsx scripts/artifacts-metadata.ts ${{ matrix.target }} --get-bundle-name --release ${{ !inputs.build_only && !inputs.artifacts_only }} --tag ${{ inputs.tag }} --auto-tag ${{ !inputs.build_only }})" >> $env:GITHUB_ENV
-          echo "VERSION=$(pnpm exec tsx scripts/artifacts-metadata.ts ${{ matrix.target }} --get-version --release ${{ !inputs.build_only && !inputs.artifacts_only }} --tag ${{ inputs.tag }} --auto-tag ${{ !inputs.build_only }})" >> $env:GITHUB_ENV
-
-      - name: Get Artifacts Envs (Automatic + Non-Windows)
-        if: ${{ github.event_name == 'release' && matrix.os != 'windows-latest' }}
-        working-directory: engines/stage-tamagotchi-godot
-        run: |
-          echo "BUNDLE_NAME=$(pnpm exec tsx scripts/artifacts-metadata.ts ${{ matrix.target }} --get-bundle-name --release --auto-tag)" >> $GITHUB_ENV
-
-      - name: Upload Artifacts (Automatic + Windows Only)
-        if: ${{ github.event_name == 'release' && matrix.os == 'windows-latest' }}
-        id: unsigned-artifacts-release
-        uses: actions/upload-artifact@v7
-        with:
-          name: ${{ env.BUNDLE_NAME }}
-          path: engines\stage-tamagotchi-godot\bundle\${{ env.BUNDLE_NAME }}
-
-      - name: Sign Windows Artifacts with SignPath (Nightly + Windows Only)
-        id: signpath-release-windows
-        continue-on-error: true
-        uses: signpath/github-action-submit-signing-request@v2
-        if: ${{ github.event_name == 'release' && (matrix.os == 'windows-latest' && github.repository == 'moeru-ai/airi') }}
-        with:
-          api-token: '${{ secrets.SIGNPATH_API_TOKEN }}'
-          organization-id: '${{ secrets.SIGNPATH_ORGANIZATION_ID }}'
-          project-slug: 'airi'
-          signing-policy-slug: 'test-signing'
-          artifact-configuration-slug: ci-github-actions-artifacts-windows
-          github-artifact-id: '${{ steps.unsigned-artifacts-release.outputs.artifact-id }}'
-          wait-for-completion: true
-          wait-for-completion-timeout-in-seconds: 900
-          download-signed-artifact-timeout-in-seconds: 900
-          output-artifact-directory: engines\stage-tamagotchi-godot\bundle\signed\windows\
-
-      - name: Warn When Windows Signing Fails (Release)
-        if: ${{ github.event_name == 'release' && matrix.os == 'windows-latest' && steps.signpath-release-windows.outcome != 'success' }}
-        run: |
-          echo "::warning::SignPath Windows signing failed for release build. Continuing with unsigned artifact at engines/stage-tamagotchi-godot/bundle/${{ env.BUNDLE_NAME }}."
-
-      - name: Move Signed Artifacts (Automatic + Windows Only)
-        if: ${{ github.event_name == 'release' && matrix.os == 'windows-latest' && steps.signpath-release-windows.outcome == 'success' }}
-        run: |
-          Move-Item -Force engines\stage-tamagotchi-godot\bundle\signed\windows\${{ env.BUNDLE_NAME }} engines\stage-tamagotchi-godot\bundle\${{ env.BUNDLE_NAME }}
-
-      - name: Upload Distribution Artifact (Automatic + macOS arm64 Only)
-        if: ${{ github.event_name == 'release' && matrix.os == 'macos-26' }}
-        uses: actions/upload-artifact@v7
-        with:
-          name: distribution-osx
-          path: engines/stage-tamagotchi-godot/bundle/${{ env.BUNDLE_NAME }}
-
-      - name: Upload Distribution Artifact (Automatic + Windows Only)
-        if: ${{ github.event_name == 'release' && matrix.os == 'windows-latest' }}
-        uses: actions/upload-artifact@v7
-        with:
-          name: distribution-win
-          path: engines/stage-tamagotchi-godot/bundle/${{ env.BUNDLE_NAME }}
-
-      - name: Upload Distribution Artifact (Automatic + Linux x64 Only)
-        if: ${{ github.event_name == 'release' && matrix.os == 'ubuntu-latest' }}
-        uses: actions/upload-artifact@v7
-        with:
-          name: distribution-linux-x64
-          path: engines/stage-tamagotchi-godot/bundle/${{ env.BUNDLE_NAME }}
-
-      - name: Upload Distribution Artifact (Automatic + Linux arm64 Only)
-        if: ${{ github.event_name == 'release' && matrix.os == 'ubuntu-24.04-arm' }}
-        uses: actions/upload-artifact@v7
-        with:
-          name: distribution-linux-arm64
-          path: engines/stage-tamagotchi-godot/bundle/${{ env.BUNDLE_NAME }}
-
-      - name: Upload To GitHub Releases (Automatic)
+      - name: Upload To GitHub Releases
         if: ${{ github.event_name == 'release' }}
         uses: softprops/action-gh-release@v2
         with:
-          files: |
-            engines/stage-tamagotchi-godot/bundle/${{ env.PRODUCT_NAME }}-*.exe
-            engines/stage-tamagotchi-godot/bundle/${{ env.PRODUCT_NAME }}-*.zip
-            engines/stage-tamagotchi-godot/bundle/${{ env.PRODUCT_NAME }}-*.dmg
-            engines/stage-tamagotchi-godot/bundle/${{ env.PRODUCT_NAME }}-*.deb
-            engines/stage-tamagotchi-godot/bundle/${{ env.PRODUCT_NAME }}-*.rpm
-            engines/stage-tamagotchi-godot/bundle/${{ env.PRODUCT_NAME }}-*.flatpak
-          append_body: true
+          files: ${{ env.PROJECT_PATH }}/bundle/${{ env.BUNDLE_NAME }}
+          tag_name: v${{ env.VERSION }}
+
+  publish-butler:
+    name: Publish to itch.io
+    needs: build
+    if: ${{ github.event_name == 'release' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Setup butler
+        uses: remarkablegames/setup-butler@v2
+
+      - name: Push to Itch
+        env:
+          BUTLER_API_KEY: ${{ secrets.BUTLER_API_KEY }}
+        run: |
+          # Example for Windows:
+          FILE=$(find artifacts -name "*.exe")
+          butler push "$FILE" user/project:windows-alpha
