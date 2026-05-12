@@ -14,10 +14,24 @@ on:
       - prereleased
   workflow_dispatch:
     inputs:
+      build_only:
+        description: 'Build only (skip release upload)'
+        required: false
+        default: false
+        type: boolean
       tag:
-        description: 'Specific tag/version (e.g. 0.10.2). Leave empty for package.json version'
+        description: 'Specific tag (e.g. 0.10.2)'
         required: false
         type: string
+      platform:
+        description: 'Target Platform'
+        type: choice
+        default: all
+        options:
+          - all
+          - windows
+          - macos
+          - linux
   schedule:
     - cron: '0 0 * * *'
 
@@ -30,44 +44,65 @@ jobs:
       matrix:
         include:
           - os: windows-latest
-            platform: win
+            platform_key: windows
+            platform_label: win
             export_preset: "Windows Desktop"
             output_path: "build/win/godot-stage.exe"
             extension: "exe"
           - os: ubuntu-latest
-            platform: linux
+            platform_key: linux
+            platform_label: linux
             export_preset: "Linux"
             output_path: "build/linux/godot-stage"
             extension: "zip"
           - os: ubuntu-24.04-arm
-            platform: linux
+            platform_key: linux
+            platform_label: linux
             export_preset: "Linux"
             output_path: "build/linux/godot-stage"
             extension: "zip"
           - os: macos-latest
-            platform: macos
+            platform_key: macos
+            platform_label: macos
             export_preset: "macOS"
             output_path: "build/mac/godot-stage.app"
             extension: "dmg"
 
     steps:
+      # Step 1: Logic to determine if this matrix instance should run
+      - name: Check Platform Filter
+        id: filter
+        shell: bash
+        run: |
+          SELECTED="${{ github.event.inputs.platform }}"
+          CURRENT="${{ matrix.platform_key }}"
+          if [[ "${{ github.event_name }}" != "workflow_dispatch" ]] || [[ "$SELECTED" == "all" ]] || [[ "$SELECTED" == "$CURRENT" ]]; then
+            echo "should_run=true" >> $GITHUB_OUTPUT
+          else
+            echo "should_run=false" >> $GITHUB_OUTPUT
+          fi
+
       - name: Checkout
+        if: steps.filter.outputs.should_run == 'true'
         uses: actions/checkout@v4
         with:
           submodules: recursive
 
       - name: Setup .NET
+        if: steps.filter.outputs.should_run == 'true'
         uses: actions/setup-dotnet@v4
         with:
           dotnet-version: '8.0.x'
 
       - name: Setup Godot
+        if: steps.filter.outputs.should_run == 'true'
         uses: chickensoft-games/setup-godot@v2
         with:
-          version: 4.6.2
+          version: 4.3.0 
           use-dotnet: true
 
       - name: Build Godot Project
+        if: steps.filter.outputs.should_run == 'true'
         shell: bash
         run: |
           cd ${{ env.PROJECT_PATH }}
@@ -75,9 +110,11 @@ jobs:
           godot --headless --export-release "${{ matrix.export_preset }}" ${{ matrix.output_path }}
 
       - name: Resolve Metadata and Bundle
+        if: steps.filter.outputs.should_run == 'true'
         shell: bash
         working-directory: ${{ env.PROJECT_PATH }}
         run: |
+          # 1. Resolve Version
           if [ -n "${{ github.event.inputs.tag }}" ]; then
             VERSION="${{ github.event.inputs.tag }}"
           elif [ -n "${{ github.event.release.tag_name }}" ]; then
@@ -85,65 +122,40 @@ jobs:
           else
             VERSION=$(jq -r '.version' package.json)
           fi
-          VERSION=${VERSION#v} # Strip 'v' prefix if present
+          VERSION=${VERSION#v}
           
+          # 2. Resolve Architecture
           ARCH="x64"
           if [[ "${{ matrix.os }}" == *"arm"* ]] || [[ "${{ runner.arch }}" == "ARM64" ]]; then
             ARCH="arm64"
           fi
 
-          # Pattern: PRODUCT-VERSION-PLATFORM-ARCH.EXT
-          BUNDLE_NAME="${{ env.PRODUCT_NAME }}-${VERSION}-${{ matrix.platform }}-${ARCH}.${{ matrix.extension }}"
+          # 3. Construct Filename
+          BUNDLE_NAME="${{ env.PRODUCT_NAME }}-${VERSION}-${{ matrix.platform_label }}-${ARCH}.${{ matrix.extension }}"
+          echo "BUNDLE_NAME=$BUNDLE_NAME" >> $GITHUB_ENV
+          echo "VERSION=$VERSION" >> $GITHUB_ENV
           
-          echo "Final Bundle Name: $BUNDLE_NAME"
           mkdir -p bundle
 
-          if [ "${{ matrix.platform }}" == "linux" ]; then
-            # Linux needs zipping because Godot exports a binary + .pck (if not embedded)
+          # 4. Platform-Specific Packaging
+          if [ "${{ matrix.platform_label }}" == "linux" ]; then
             zip -rj "bundle/$BUNDLE_NAME" build/linux/
-          elif [ "${{ matrix.platform }}" == "macos" ]; then
-            # Simple DMG creation for macOS
+          elif [ "${{ matrix.platform_label }}" == "macos" ]; then
             hdiutil create -volname "${{ env.PRODUCT_NAME }}" -srcfolder "${{ matrix.output_path }}" -ov -format UDZO "bundle/$BUNDLE_NAME"
           else
-            # Windows
             cp "${{ matrix.output_path }}" "bundle/$BUNDLE_NAME"
           fi
 
-          # Export for subsequent steps
-          echo "BUNDLE_NAME=$BUNDLE_NAME" >> $GITHUB_ENV
-          echo "VERSION=$VERSION" >> $GITHUB_ENV
-
-      - name: Upload Distribution Artifact
+      - name: Upload Artifact
+        if: steps.filter.outputs.should_run == 'true'
         uses: actions/upload-artifact@v4
         with:
-          name: distribution-${{ matrix.platform }}-${{ strategy.job-index }}
+          name: distribution-${{ matrix.platform_label }}-${{ strategy.job-index }}
           path: ${{ env.PROJECT_PATH }}/bundle/${{ env.BUNDLE_NAME }}
 
-      - name: Upload To GitHub Releases
-        if: ${{ github.event_name == 'release' }}
+      - name: Release to GitHub
+        if: steps.filter.outputs.should_run == 'true' && (github.event_name == 'release' || (github.event_name == 'workflow_dispatch' && github.event.inputs.build_only == 'false'))
         uses: softprops/action-gh-release@v2
         with:
           files: ${{ env.PROJECT_PATH }}/bundle/${{ env.BUNDLE_NAME }}
           tag_name: v${{ env.VERSION }}
-
-  publish-butler:
-    name: Publish to itch.io
-    needs: build
-    if: ${{ github.event_name == 'release' }}
-    runs-on: ubuntu-latest
-    steps:
-      - name: Download all artifacts
-        uses: actions/download-artifact@v4
-        with:
-          path: artifacts
-
-      - name: Setup butler
-        uses: remarkablegames/setup-butler@v2
-
-      - name: Push to Itch
-        env:
-          BUTLER_API_KEY: ${{ secrets.BUTLER_API_KEY }}
-        run: |
-          # Example for Windows:
-          FILE=$(find artifacts -name "*.exe")
-          butler push "$FILE" user/project:windows-alpha
