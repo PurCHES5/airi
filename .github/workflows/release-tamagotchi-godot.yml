@@ -97,8 +97,19 @@ jobs:
         if: steps.filter.outputs.should_run == 'true'
         uses: chickensoft-games/setup-godot@v2
         with:
-          version: 4.3.0 
+          version: 4.6.2 
           use-dotnet: true
+
+      - name: Download and Prepare Godot Source Headers
+        if: steps.filter.outputs.should_run == 'true'
+        shell: bash
+        run: |
+          rm -rf godot "${GODOT_VERSION}-stable.tar.gz" "godot-${GODOT_VERSION}-stable"
+          curl -LO "https://github.com/godotengine/godot/archive/refs/tags/${GODOT_VERSION}-stable.tar.gz"
+          tar -xzf "${GODOT_VERSION}-stable.tar.gz"
+          mv "godot-${GODOT_VERSION}-stable" godot
+
+          cd godot
 
       - name: Build Godot Project
         if: steps.filter.outputs.should_run == 'true'
