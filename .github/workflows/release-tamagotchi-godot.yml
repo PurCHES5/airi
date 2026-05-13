@@ -101,16 +101,28 @@ jobs:
           version: 4.6.2 
           use-dotnet: true
 
-      - name: Download and Prepare Godot Source Headers
+      - name: Install Godot Export Templates
         if: steps.filter.outputs.should_run == 'true'
         shell: bash
         run: |
-          rm -rf godot "${GODOT_VERSION}-stable.tar.gz" "godot-${GODOT_VERSION}-stable"
-          curl -LO "https://github.com/godotengine/godot/archive/refs/tags/${GODOT_VERSION}-stable.tar.gz"
-          tar -xzf "${GODOT_VERSION}-stable.tar.gz"
-          mv "godot-${GODOT_VERSION}-stable" godot
+          GODOT_VERSION="${{ env.GODOT_VERSION }}.stable.mono"
+          
+          if [[ "${{ runner.os }}" == "Windows" ]]; then
+            TARGET_DIR="$APPDATA/Godot/export_templates/$GODOT_VERSION"
+          elif [[ "${{ runner.os }}" == "macOS" ]]; then
+            TARGET_DIR="$HOME/Library/Application Support/Godot/export_templates/$GODOT_VERSION"
+          else
+            TARGET_DIR="$HOME/.local/share/godot/export_templates/$GODOT_VERSION"
+          fi
 
-          cd godot
+          mkdir -p "$TARGET_DIR"
+          
+          TEMP_FILE="templates.tpz"
+          curl -L "https://downloads.tuxfamily.org/godotengine/${{ env.GODOT_VERSION }}/mono/Godot_v${{ env.GODOT_VERSION }}-stable_mono_export_templates.tpz" -o "$TEMP_FILE"
+          
+          unzip "$TEMP_FILE" -d temp_templates
+          mv temp_templates/templates/* "$TARGET_DIR/"
+          rm -rf "$TEMP_FILE" temp_templates
 
       - name: Build Godot Project
         if: steps.filter.outputs.should_run == 'true'
