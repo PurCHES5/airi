@@ -107,6 +107,7 @@ jobs:
         run: |
           GODOT_VERSION="${{ env.GODOT_VERSION }}.stable.mono"
           
+          # Determine target directory based on OS
           if [[ "${{ runner.os }}" == "Windows" ]]; then
             TARGET_DIR="$APPDATA/Godot/export_templates/$GODOT_VERSION"
           elif [[ "${{ runner.os }}" == "macOS" ]]; then
@@ -117,12 +118,20 @@ jobs:
 
           mkdir -p "$TARGET_DIR"
           
-          TEMP_FILE="templates.tpz"
-          curl -L "https://downloads.tuxfamily.org/godotengine/${{ env.GODOT_VERSION }}/mono/Godot_v${{ env.GODOT_VERSION }}-stable_mono_export_templates.tpz" -o "$TEMP_FILE"
+          URL="https://github.com/godotengine/godot/releases/download/${{ env.GODOT_VERSION }}-stable/Godot_v${{ env.GODOT_VERSION }}-stable_mono_export_templates.tpz"
           
-          unzip "$TEMP_FILE" -d temp_templates
-          mv temp_templates/templates/* "$TARGET_DIR/"
-          rm -rf "$TEMP_FILE" temp_templates
+          TEMP_FILE="templates.tpz"
+          
+          curl -L --retry 5 --retry-delay 5 --connect-timeout 30 "$URL" -o "$TEMP_FILE"
+          
+          if [ -f "$TEMP_FILE" ] && [ -s "$TEMP_FILE" ]; then
+            unzip -q "$TEMP_FILE" -d temp_templates
+            mv temp_templates/templates/* "$TARGET_DIR/"
+            rm -rf "$TEMP_FILE" temp_templates
+            echo "Templates installed to $TARGET_DIR"
+          else
+            echo "Failed to download or install Godot Export Templates"
+          fi
 
       - name: Build Godot Project
         if: steps.filter.outputs.should_run == 'true'
