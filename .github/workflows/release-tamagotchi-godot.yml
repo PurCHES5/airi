@@ -7,6 +7,7 @@ permissions:
 env:
   PRODUCT_NAME: 'AIRI'
   PROJECT_PATH: 'engines/stage-tamagotchi-godot'
+  GODOT_VERSION: 4.6.2
 
 on:
   release:
